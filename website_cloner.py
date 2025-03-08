@@ -2,6 +2,7 @@ import os
 import sys
 import subprocess
 import json
+import venv
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -20,8 +21,19 @@ def run_command(command):
         console.print(f"[red]Error running command: {str(e)}[/red]")
         return False
 
-def install_package(package):
-    return run_command(f"{sys.executable} -m pip install {package}")
+def create_virtual_environment():
+    if os.path.exists("venv"):
+        console.print("[yellow]Virtual environment already exists[/yellow]")
+        return True
+    
+    console.print("[yellow]Creating virtual environment...[/yellow]")
+    try:
+        venv.create("venv", with_pip=True)
+        console.print("[green]✓[/green] Virtual environment created successfully")
+        return True
+    except Exception as e:
+        console.print(f"[red]Failed to create virtual environment: {str(e)}[/red]")
+        return False
 
 def setup():
     console.print(Panel.fit(
@@ -30,30 +42,18 @@ def setup():
         border_style="blue"
     ))
     
-    # Install required packages for setup
-    console.print("[yellow]Installing core dependencies...[/yellow]")
-    required_packages = ['virtualenv', 'rich']
-    for package in required_packages:
-        if not install_package(package):
-            console.print(f"[red]Failed to install {package}[/red]")
-            return False
-    
-    # Now we can import virtualenv after installing it
-    import virtualenv
-    from rich.progress import track
-    
     # Create virtual environment
-    if not os.path.exists("venv"):
-        console.print("[yellow]Creating virtual environment...[/yellow]")
-        try:
-            virtualenv.cli_run(["venv"])
-        except Exception as e:
-            console.print(f"[red]Failed to create virtual environment: {str(e)}[/red]")
-            return False
+    if not create_virtual_environment():
+        return False
     
     # Install requirements in virtual environment
     console.print("[yellow]Installing requirements in virtual environment...[/yellow]")
     pip_cmd = os.path.join("venv", "Scripts", "pip") if sys.platform == "win32" else os.path.join("venv", "bin", "pip")
+    
+    # First upgrade pip
+    if not run_command(f'"{pip_cmd}" install --upgrade pip'):
+        console.print("[red]Failed to upgrade pip[/red]")
+        return False
     
     requirements = [
         "requests==2.31.0",
@@ -63,10 +63,12 @@ def setup():
         "rich==13.7.0"
     ]
     
-    for req in track(requirements, description="Installing packages..."):
+    for req in requirements:
+        console.print(f"Installing {req}...")
         if not run_command(f'"{pip_cmd}" install {req}'):
             console.print(f"[red]Failed to install {req}[/red]")
             return False
+        console.print(f"[green]✓[/green] {req} installed successfully")
     
     # Setup ngrok
     console.print("[yellow]Setting up ngrok...[/yellow]")
@@ -112,7 +114,7 @@ def setup_ngrok():
 
 def main():
     try:
-        # Only import these after setup is complete
+        # Check if we need to set up the environment
         if not os.path.exists("venv") or not os.path.exists(os.path.join("venv", "Scripts" if sys.platform == "win32" else "bin", "python")):
             if not setup():
                 console.print("[red]Setup failed. Please try again.[/red]")
