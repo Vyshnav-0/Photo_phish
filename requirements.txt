@@ -1,6 +1,0 @@
-requests==2.31.0
-beautifulsoup4==4.12.2
-flask==3.0.0
-pyngrok==7.0.5
-rich==13.7.0
-virtualenv==20.25.0 
